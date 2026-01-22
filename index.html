@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Понимаю или Осуждаю</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- SDK Telegram -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    
+    <!-- Firebase SDK (Версия Compat) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+</head>
+<body>
+
+    <!-- ЭКРАН 1: ГЛАВНОЕ МЕНЮ -->
+    <div id="menuView" class="view" style="display: flex;">
+        <div class="menu-container">
+            <h1 class="menu-title">Понимаю или<br>Осуждаю</h1>
+            <div class="category-grid">
+                <button class="cat-btn" onclick="startGame('all')">🌟 Все подряд</button>
+                <button class="cat-btn" onclick="startGame('lifestyle')">🏠 Жизнь</button>
+                <button class="cat-btn" onclick="startGame('work')">💼 Работа</button>
+                <button class="cat-btn" onclick="startGame('food')">🍕 Еда</button>
+            </div>
+            <button class="history-menu-btn" onclick="toggleHistory(true)">📜 Моя история</button>
+        </div>
+    </div>
+
+    <!-- ЭКРАН 2: ИГРОВОЙ ПРОЦЕСС -->
+    <div id="gameView" class="view" style="display: none;">
+        <button id="homeBtn" class="top-icon" onclick="goBackToMenu()">🏠 Меню</button>
+        <button id="historyBtn" class="top-icon" onclick="toggleHistory(true)">📜</button>
+        
+        <div id="app">
+            <div class="card-container" id="cardContainer">
+                <div class="card" id="cardElement">
+                    <div class="overlay"></div>
+                    <div class="content">
+                        <div id="adBadge" class="ad-badge">РЕКЛАМА</div>
+                        <div class="card-text" id="cardText">Загрузка...</div>
+                        
+                        <div class="actions" id="actionButtons">
+                            <button class="btn btn-condemn" onclick="vote('condemn')">Осуждаю 👎</button>
+                            <button class="btn btn-understand" onclick="vote('understand')">Понимаю 🤝</button>
+                        </div>
+
+                        <div class="ad-actions" id="adButtons" style="display: none;">
+                            <button class="join-btn" onclick="openAdLink()">Перейти 📢</button>
+                            <button class="next-btn" onclick="nextCard()">Пропустить →</button>
+                        </div>
+
+                        <div class="stats" id="statsSection">
+                            <div class="stat-rows">
+                                <div id="labelUnderstand" class="stat-row-item color-u"></div>
+                                <div id="labelCondemn" class="stat-row-item color-c"></div>
+                            </div>
+                            <div class="stat-bar-container">
+                                <div id="statUnderstand" class="stat-part bar-u"></div>
+                                <div id="statCondemn" class="stat-part bar-c"></div>
+                            </div>
+                            
+                            <button class="comments-toggle" onclick="openComments()">💬 Обсуждение</button>
+
+                            <div class="result-actions">
+                                <button class="share-btn" onclick="shareApp()">Поделиться 🚀</button>
+                                <button class="next-btn" onclick="nextCard()">Дальше →</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- МОДАЛКА ИСТОРИИ -->
+    <div id="historyModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>История выборов</h2>
+                <button class="close-modal" onclick="toggleHistory(false)">✕</button>
+            </div>
+            <div id="historyList" class="history-list"></div>
+        </div>
+    </div>
+
+    <!-- МОДАЛКА КОММЕНТАРИЕВ -->
+    <div id="commentsModal" class="modal">
+        <div class="modal-content comm-content">
+            <div class="modal-header">
+                <h2>Мнения игроков</h2>
+                <button class="close-modal" onclick="closeComments()">✕</button>
+            </div>
+            <div id="commentsList" class="comments-list"></div>
+            
+            <div class="comment-input-area">
+                <div class="input-wrapper">
+                    <textarea id="commentInput" placeholder="Напишите ваше мнение..." maxlength="500" oninput="updateCharCounter()"></textarea>
+                    <button id="sendCommentBtn" onclick="addComment()">⬆️</button>
+                </div>
+                <div class="comment-footer">
+                    <label class="anon-label">
+                        <input type="checkbox" id="anonCheckbox"> Анонимно
+                    </label>
+                    <div id="charCounter" class="char-counter">0 / 500</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
