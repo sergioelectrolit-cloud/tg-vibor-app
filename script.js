@@ -16,6 +16,11 @@ const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
+// ТВОЯ ССЫЛКА С РЕНДЕРА
+const PROXY_SERVER_URL = "https://tg-vibor-app.onrender.com/send"; 
+// ТВОЙ ID (Узнай его у бота @userinfobot)
+const MY_ADMIN_ID = "ЗАМЕНИ_НА_СВОЙ_ID_ЦИФРАМИ"; 
+
 let allCards = [], filteredCards = [], adsData = [];
 let currentIndex = 0, adIndex = 0, viewedCount = 0, isAdMode = false;
 let nextAdThreshold = 10;
@@ -35,16 +40,30 @@ async function init() {
     } catch (e) { console.error("Init Error", e); }
 }
 
+// ФУНКЦИЯ ОТПРАВКИ УВЕДОМЛЕНИЯ ЧЕРЕЗ РЕНДЕР
+async function sendAdminNotification(text) {
+    try {
+        await fetch(PROXY_SERVER_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chatId: MY_ADMIN_ID,
+                text: text
+            })
+        });
+    } catch (e) {
+        console.error("Ошибка прокси:", e);
+    }
+}
+
 // --- 4. НАВИГАЦИЯ ---
 function startGame(category) {
     tg.HapticFeedback.impactOccurred('medium');
     filteredCards = category === 'all' ? [...allCards] : allCards.filter(c => c.category === category);
     if (filteredCards.length === 0) return;
-
     currentIndex = 0; viewedCount = 0;
     document.getElementById('menuView').style.display = 'none';
     document.getElementById('gameView').style.display = 'flex';
-    
     tg.BackButton.show();
     tg.BackButton.onClick(goBackToMenu);
     renderCard();
@@ -61,8 +80,7 @@ function goBackToMenu() {
 function renderCard() {
     const el = document.getElementById('cardElement');
     const badge = document.getElementById('adBadge');
-    lastUserChoice = null; // Сброс выбора для новой карточки
-    
+    lastUserChoice = null;
     if (viewedCount >= nextAdThreshold && adsData.length > 0) {
         isAdMode = true;
         const ad = adsData[adIndex];
@@ -83,7 +101,6 @@ function renderCard() {
         document.getElementById('statsSection').style.display = 'none';
         document.getElementById('adButtons').style.display = 'none';
     }
-
     const container = document.getElementById('cardContainer');
     container.classList.remove('slide-up');
     container.classList.add('slide-in');
@@ -94,9 +111,7 @@ function vote(type) {
     if (isAdMode) return;
     tg.HapticFeedback.impactOccurred('medium');
     lastUserChoice = type;
-    
     const card = filteredCards[currentIndex];
-    
     userHistory.unshift({
         text: card.text,
         choice: type === 'understand' ? 'ПОНИМАЮ 🤝' : 'ОСУЖДАЮ 👎',
@@ -104,20 +119,14 @@ function vote(type) {
     });
     if (userHistory.length > 30) userHistory.pop();
     localStorage.setItem('swipe_history', JSON.stringify(userHistory));
-
-    if (type === 'understand') card.understand++;
-    else card.condemn++;
-
+    if (type === 'understand') card.understand++; else card.condemn++;
     const total = card.understand + card.condemn;
     const uP = Math.round((card.understand / total) * 100);
     const cP = 100 - uP;
-
     document.getElementById('labelUnderstand').innerText = `${uP}% ПОНИМАЮТ`;
     document.getElementById('labelCondemn').innerText = `${cP}% ОСУЖДАЮТ`;
-    
     document.getElementById('actionButtons').style.display = 'none';
     document.getElementById('statsSection').style.display = 'block';
-
     setTimeout(() => {
         document.getElementById('statUnderstand').style.width = uP + '%';
         document.getElementById('statCondemn').style.width = cP + '%';
@@ -137,8 +146,7 @@ function nextCard() {
 // --- 6. КОММЕНТАРИИ ---
 function updateCharCounter() {
     const input = document.getElementById('commentInput');
-    const counter = document.getElementById('charCounter');
-    counter.innerText = `${input.value.length} / 500`;
+    document.getElementById('charCounter').innerText = `${input.value.length} / 500`;
 }
 
 async function openComments() {
@@ -146,108 +154,61 @@ async function openComments() {
     const list = document.getElementById('commentsList');
     list.innerHTML = '<p class="status-msg">Загрузка мнений...</p>';
     document.getElementById('commentsModal').style.display = 'flex';
-
     try {
-        const snapshot = await db.collection('comments')
-            .where('cardId', '==', cardId)
-            .orderBy('createdAt', 'desc')
-            .limit(40).get();
-
-        if (snapshot.empty) {
-            list.innerHTML = '<p class="status-msg">Здесь пока пусто. Будь первым!</p>';
-            return;
-        }
-
+        const snapshot = await db.collection('comments').where('cardId', '==', cardId).orderBy('createdAt', 'desc').limit(40).get();
+        if (snapshot.empty) { list.innerHTML = '<p class="status-msg">Здесь пока пусто.</p>'; return; }
         list.innerHTML = snapshot.docs.map(doc => {
             const c = doc.data();
-            return `
-                <div class="comment-item">
-                    <div class="author-info">
-                        <div class="vote-badge ${c.choice === 'understand' ? 'badge-u' : 'badge-c'}"></div>
-                        <b>${escapeHtml(c.name)}</b>
-                    </div>
-                    <p>${escapeHtml(c.text)}</p>
-                </div>
-            `;
+            return `<div class="comment-item"><div class="author-info"><div class="vote-badge ${c.choice === 'understand' ? 'badge-u' : 'badge-c'}"></div><b>${escapeHtml(c.name)}</b></div><p>${escapeHtml(c.text)}</p></div>`;
         }).join('');
-    } catch (e) { 
-        console.error(e);
-        list.innerHTML = '<p class="status-msg" style="color:red;">Нужно создать индекс в Firebase</p>'; 
-    }
+    } catch (e) { list.innerHTML = '<p class="status-msg">Ошибка загрузки</p>'; }
 }
 
 async function addComment() {
     const input = document.getElementById('commentInput');
     const isAnon = document.getElementById('anonCheckbox').checked;
     const text = input.value.trim();
-    const sendBtn = document.getElementById('sendCommentBtn');
-
-    if (!text) return;
-    if (!lastUserChoice) {
-        tg.showAlert("Сначала сделай выбор (Понимаю или Осуждаю)!");
-        return;
-    }
-
-    sendBtn.disabled = true;
-    const cardId = filteredCards[currentIndex].id.toString();
+    if (!text || !lastUserChoice) return;
     
-    // Определяем имя пользователя
+    document.getElementById('sendCommentBtn').disabled = true;
+    const cardText = filteredCards[currentIndex].text;
     let userName = "Аноним";
-    if (!isAnon && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+    if (!isAnon && tg.initDataUnsafe?.user) {
         const u = tg.initDataUnsafe.user;
-        userName = u.username ? `@${u.username}` : `${u.first_name} ${u.last_name || ''}`.trim();
+        userName = u.username ? `@${u.username}` : `${u.first_name}`;
     }
 
     try {
         await db.collection('comments').add({
-            cardId: cardId,
+            cardId: filteredCards[currentIndex].id.toString(),
             name: userName,
             text: text,
             choice: lastUserChoice,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
-        
+
+        // ОТПРАВКА ЧЕРЕЗ РЕНДЕР
+        const msg = `💬 Коммент к: "${cardText}"\nОт: ${userName}\nТекст: ${text}`;
+        sendAdminNotification(msg);
+
         input.value = '';
-        document.getElementById('anonCheckbox').checked = false;
         updateCharCounter();
         await openComments();
         tg.HapticFeedback.notificationOccurred('success');
-    } catch (e) { 
-        alert("Ошибка при отправке"); 
-        console.error(e);
-    } finally {
-        sendBtn.disabled = false;
-    }
+    } catch (e) { console.error(e); } finally { document.getElementById('sendCommentBtn').disabled = false; }
 }
 
 function closeComments() { document.getElementById('commentsModal').style.display = 'none'; }
-
-// Защита от XSS
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// --- 7. ВСПОМОГАТЕЛЬНОЕ ---
-function toggleHistory(show) {
+function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+function toggleHistory(s) {
     const m = document.getElementById('historyModal');
-    if (show) {
+    if (s) {
         document.getElementById('historyList').innerHTML = userHistory.length ? 
-            userHistory.map(h => `<div class="history-item"><span>${h.text.slice(0,30)}...</span><b style="color:${h.color}">${h.choice}</b></div>`).join('') :
-            '<p style="text-align:center; opacity:0.5;">История пуста</p>';
+            userHistory.map(h => `<div class="history-item"><span>${h.text.slice(0,30)}...</span><b style="color:${h.color}">${h.choice}</b></div>`).join('') : '<p>Пусто</p>';
         m.style.display = 'flex';
     } else m.style.display = 'none';
 }
-
-function shareApp() {
-    const url = `https://t.me/your_bot/app?startapp=ref_${tg.initDataUnsafe.user?.id || 0}`;
-    tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=Зацени игру "Понимаю или Осуждаю"!`);
-}
-
-function openAdLink() { 
-    const link = adsData[(adIndex-1+adsData.length)%adsData.length].link;
-    tg.openTelegramLink(link); 
-}
+function shareApp() { tg.openTelegramLink(`https://t.me/share/url?url=https://t.me/your_bot/app&text=Зацени!`); }
+function openAdLink() { tg.openTelegramLink(adsData[(adIndex-1+adsData.length)%adsData.length].link); }
 
 init();
