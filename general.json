@@ -1,0 +1,26 @@
+[
+  {
+    "id": 1,
+    "category": "lifestyle",
+    "text": "Ходить на свидания только чтобы бесплатно поесть",
+    "image": "#FFD1DC",
+    "understand": 150,
+    "condemn": 850
+  },
+  {
+    "id": 2,
+    "category": "work",
+    "text": "Работать лежа в кровати весь день и не чистить зубы до вечера",
+    "image": "#B2E2F2",
+    "understand": 1200,
+    "condemn": 150
+  },
+  {
+    "id": 3,
+    "category": "food",
+    "text": "Есть пиццу с ананасами, запивая её кефиром",
+    "image": "#FDFD96",
+    "understand": 400,
+    "condemn": 600
+  }
+]
