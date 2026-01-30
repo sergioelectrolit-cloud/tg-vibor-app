@@ -1,214 +1,310 @@
-// --- 1. КОНФИГУРАЦИЯ FIREBASE ---
-const firebaseConfig = {
-  apiKey: "AIzaSyBn6YiMrM3wabyY9fry6iC06qC6cgX160E",
-  authDomain: "tgvibor.firebaseapp.com",
-  projectId: "tgvibor",
-  storageBucket: "tgvibor.firebasestorage.app",
-  messagingSenderId: "884340908169",
-  appId: "1:884340908169:web:7b1e3a2375625a49a3e658",
-  measurementId: "G-6N9RZVW8N2"
-};
-firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
-
-// --- 2. ПЕРЕМЕННЫЕ ---
 const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
-// ТВОЯ ССЫЛКА С РЕНДЕРА
-const PROXY_SERVER_URL = "https://tg-vibor-app.onrender.com/send"; 
-// ТВОЙ ID (Узнай его у бота @userinfobot)
-const MY_ADMIN_ID = "ЗАМЕНИ_НА_СВОЙ_ID_ЦИФРАМИ"; 
+// 1. КОНФИГУРАЦИЯ ТЕМ
+// Просто добавляйте имя файла в этот массив, и он автоматически подтянется в общую ленту
+const JSON_FILES = [
+    'general.json',
+    'partnership.json',
+    'work.json',
+    'friends.json',
+    'food.json',
+    'lifestyle.json'
+];
 
-let allCards = [], filteredCards = [], adsData = [];
-let currentIndex = 0, adIndex = 0, viewedCount = 0, isAdMode = false;
-let nextAdThreshold = 10;
-let lastUserChoice = null;
+// 2. СОСТОЯНИЕ ПРИЛОЖЕНИЯ
+let allCards = [];      // Все перемешанные карточки
+let adsData = [];       // Рекламные блоки
+let allComments = {};   // Объект с комментариями { "work_1": [...], "general_5": [...] }
+let userHistory = JSON.parse(localStorage.getItem('userHistory') || '[]');
+let userLocalChoices = JSON.parse(localStorage.getItem('userLocalChoices') || '{}'); // Сохраняем выборы игрока
+let userStats = { 
+    understand: Object.values(userLocalChoices).filter(v => v === 'understand').length,
+    condemn: Object.values(userLocalChoices).filter(v => v === 'condemn').length,
+    total: Object.keys(userLocalChoices).length
+};
 
-let userHistory = JSON.parse(localStorage.getItem('swipe_history')) || [];
+let loadedCount = 0; // Порядковый номер в ленте
+let currentDataIdForComments = null; // ID карточки, чьи комменты сейчас открыты
 
-// --- 3. ИНИЦИАЛИЗАЦИЯ ---
-async function init() {
+const feedContainer = document.getElementById('feedContainer');
+
+// 3. ИНИЦИАЛИЗАЦИЯ
+async function initApp() {
     try {
-        const [cRes, aRes] = await Promise.all([
-            fetch('cards.json?v=' + Date.now()),
-            fetch('ads.json?v=' + Date.now())
+        // Загружаем системные файлы
+        const [adsRes, commRes] = await Promise.all([
+            fetch('ads.json').then(r => r.json()).catch(() => []),
+            fetch('comments.json').then(r => r.json()).catch(() => ({}))
         ]);
-        allCards = await cRes.json();
-        adsData = await aRes.json();
-    } catch (e) { console.error("Init Error", e); }
-}
+        adsData = adsRes;
+        allComments = commRes;
 
-// ФУНКЦИЯ ОТПРАВКИ УВЕДОМЛЕНИЯ ЧЕРЕЗ РЕНДЕР
-async function sendAdminNotification(text) {
-    try {
-        await fetch(PROXY_SERVER_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chatId: MY_ADMIN_ID,
-                text: text
-            })
+        // Загружаем темы и присваиваем префиксы ID
+        let cardsBuffer = [];
+        const loadPromises = JSON_FILES.map(async (file) => {
+            try {
+                const r = await fetch(file);
+                const data = await r.json();
+                const prefix = file.split('.')[0]; // Получаем 'work' из 'work.json'
+                
+                return data.map(item => ({
+                    ...item,
+                    id: `${prefix}_${item.id}` // Глобально уникальный ID
+                }));
+            } catch (e) {
+                console.error(`Ошибка загрузки файла ${file}:`, e);
+                return [];
+            }
         });
+
+        const results = await Promise.all(loadPromises);
+        allCards = results.flat().sort(() => Math.random() - 0.5);
+
+        if (allCards.length === 0) {
+            feedContainer.innerHTML = '<div style="padding:50px; text-align:center;">Ошибка загрузки данных. Проверьте JSON файлы.</div>';
+            return;
+        }
+
+        // Запускаем ленту
+        loadMore(5);
+
     } catch (e) {
-        console.error("Ошибка прокси:", e);
+        console.error("Критическая ошибка:", e);
     }
 }
 
-// --- 4. НАВИГАЦИЯ ---
-function startGame(category) {
-    tg.HapticFeedback.impactOccurred('medium');
-    filteredCards = category === 'all' ? [...allCards] : allCards.filter(c => c.category === category);
-    if (filteredCards.length === 0) return;
-    currentIndex = 0; viewedCount = 0;
-    document.getElementById('menuView').style.display = 'none';
-    document.getElementById('gameView').style.display = 'flex';
-    tg.BackButton.show();
-    tg.BackButton.onClick(goBackToMenu);
-    renderCard();
-}
+// Стартуем сразу
+initApp();
 
-function goBackToMenu() {
-    tg.HapticFeedback.impactOccurred('light');
-    tg.BackButton.hide();
-    document.getElementById('gameView').style.display = 'none';
-    document.getElementById('menuView').style.display = 'flex';
-}
-
-// --- 5. ИГРОВАЯ ЛОГИКА ---
-function renderCard() {
-    const el = document.getElementById('cardElement');
-    const badge = document.getElementById('adBadge');
-    lastUserChoice = null;
-    if (viewedCount >= nextAdThreshold && adsData.length > 0) {
-        isAdMode = true;
-        const ad = adsData[adIndex];
-        document.getElementById('cardText').innerText = ad.text;
-        el.style.backgroundImage = `url('${ad.image}')`;
-        badge.style.display = 'block';
-        document.getElementById('actionButtons').style.display = 'none';
-        document.getElementById('statsSection').style.display = 'none';
-        document.getElementById('adButtons').style.display = 'flex';
-        adIndex = (adIndex + 1) % adsData.length;
-    } else {
-        isAdMode = false;
-        const card = filteredCards[currentIndex];
-        document.getElementById('cardText').innerText = card.text;
-        el.style.backgroundImage = `url('${card.image}')`;
-        badge.style.display = 'none';
-        document.getElementById('actionButtons').style.display = 'flex';
-        document.getElementById('statsSection').style.display = 'none';
-        document.getElementById('adButtons').style.display = 'none';
+// 4. БЕСКОНЕЧНЫЙ СКРОЛЛ
+feedContainer.addEventListener('scroll', () => {
+    // Если до конца ленты осталось меньше 2-х экранов — добавляем еще
+    if (feedContainer.scrollTop + feedContainer.clientHeight >= feedContainer.scrollHeight - (window.innerHeight * 2)) {
+        loadMore(5);
     }
-    const container = document.getElementById('cardContainer');
-    container.classList.remove('slide-up');
-    container.classList.add('slide-in');
-    setTimeout(() => container.classList.remove('slide-in'), 500);
+});
+
+function loadMore(count) {
+    for (let i = 0; i < count; i++) {
+        // Берем карточку по кругу через остаток от деления
+        const dataIndex = loadedCount % allCards.length;
+        const cardData = allCards[dataIndex];
+        const instanceId = `view-${loadedCount}`; // ID для DOM
+
+        // Рекламная пауза каждые 8 карточек
+        if (loadedCount > 0 && loadedCount % 8 === 0 && adsData.length > 0) {
+            const ad = adsData[Math.floor(Math.random() * adsData.length)];
+            feedContainer.appendChild(createAdElement(ad));
+        }
+
+        feedContainer.appendChild(createCardElement(cardData, instanceId));
+        loadedCount++;
+    }
 }
 
-function vote(type) {
-    if (isAdMode) return;
-    tg.HapticFeedback.impactOccurred('medium');
-    lastUserChoice = type;
-    const card = filteredCards[currentIndex];
-    userHistory.unshift({
-        text: card.text,
-        choice: type === 'understand' ? 'ПОНИМАЮ 🤝' : 'ОСУЖДАЮ 👎',
-        color: type === 'understand' ? '#34c759' : '#ff3b30'
-    });
-    if (userHistory.length > 30) userHistory.pop();
-    localStorage.setItem('swipe_history', JSON.stringify(userHistory));
-    if (type === 'understand') card.understand++; else card.condemn++;
-    const total = card.understand + card.condemn;
-    const uP = Math.round((card.understand / total) * 100);
-    const cP = 100 - uP;
-    document.getElementById('labelUnderstand').innerText = `${uP}% ПОНИМАЮТ`;
-    document.getElementById('labelCondemn').innerText = `${cP}% ОСУЖДАЮТ`;
-    document.getElementById('actionButtons').style.display = 'none';
-    document.getElementById('statsSection').style.display = 'block';
-    setTimeout(() => {
-        document.getElementById('statUnderstand').style.width = uP + '%';
-        document.getElementById('statCondemn').style.width = cP + '%';
-    }, 50);
-}
-
-function nextCard() {
-    tg.HapticFeedback.selectionChanged();
-    document.getElementById('cardContainer').classList.add('slide-up');
-    setTimeout(() => {
-        if (isAdMode) { viewedCount = 0; nextAdThreshold = Math.floor(Math.random() * 5) + 10; }
-        else { currentIndex = (currentIndex + 1) % filteredCards.length; viewedCount++; }
-        renderCard();
-    }, 400);
-}
-
-// --- 6. КОММЕНТАРИИ ---
-function updateCharCounter() {
-    const input = document.getElementById('commentInput');
-    document.getElementById('charCounter').innerText = `${input.value.length} / 500`;
-}
-
-async function openComments() {
-    const cardId = filteredCards[currentIndex].id.toString();
-    const list = document.getElementById('commentsList');
-    list.innerHTML = '<p class="status-msg">Загрузка мнений...</p>';
-    document.getElementById('commentsModal').style.display = 'flex';
-    try {
-        const snapshot = await db.collection('comments').where('cardId', '==', cardId).orderBy('createdAt', 'desc').limit(40).get();
-        if (snapshot.empty) { list.innerHTML = '<p class="status-msg">Здесь пока пусто.</p>'; return; }
-        list.innerHTML = snapshot.docs.map(doc => {
-            const c = doc.data();
-            return `<div class="comment-item"><div class="author-info"><div class="vote-badge ${c.choice === 'understand' ? 'badge-u' : 'badge-c'}"></div><b>${escapeHtml(c.name)}</b></div><p>${escapeHtml(c.text)}</p></div>`;
-        }).join('');
-    } catch (e) { list.innerHTML = '<p class="status-msg">Ошибка загрузки</p>'; }
-}
-
-async function addComment() {
-    const input = document.getElementById('commentInput');
-    const isAnon = document.getElementById('anonCheckbox').checked;
-    const text = input.value.trim();
-    if (!text || !lastUserChoice) return;
+// 5. СОЗДАНИЕ ЭЛЕМЕНТОВ
+function createCardElement(data, instanceId) {
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.setAttribute('data-category', data.category || 'general');
     
-    document.getElementById('sendCommentBtn').disabled = true;
-    const cardText = filteredCards[currentIndex].text;
-    let userName = "Аноним";
-    if (!isAnon && tg.initDataUnsafe?.user) {
-        const u = tg.initDataUnsafe.user;
-        userName = u.username ? `@${u.username}` : `${u.first_name}`;
+    // Фон: цвет или картинка
+    if (data.image && data.image.startsWith('#')) {
+        div.style.backgroundColor = data.image;
+    } else if (data.image) {
+        div.style.backgroundImage = `url(${data.image})`;
     }
 
-    try {
-        await db.collection('comments').add({
-            cardId: filteredCards[currentIndex].id.toString(),
-            name: userName,
-            text: text,
-            choice: lastUserChoice,
-            createdAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+    // Проверяем, голосовал ли уже пользователь за эту КАРТУ (по data.id)
+    const existingChoice = userLocalChoices[data.id];
+    const isAnswered = !!existingChoice;
 
-        // ОТПРАВКА ЧЕРЕЗ РЕНДЕР
-        const msg = `💬 Коммент к: "${cardText}"\nОт: ${userName}\nТекст: ${text}`;
-        sendAdminNotification(msg);
+    div.innerHTML = `
+        <div class="overlay"></div>
+        <div class="content">
+            <div class="card-text">${data.text}</div>
+            
+            <!-- БЛОК КНОПОК -->
+            <div class="actions" id="actions-${instanceId}" style="display: ${isAnswered ? 'none' : 'flex'}">
+                <button class="btn btn-condemn" onclick="vote('${instanceId}', '${data.id}', 'condemn', ${data.understand}, ${data.condemn})">Осуждаю 👎</button>
+                <button class="btn btn-understand" onclick="vote('${instanceId}', '${data.id}', 'understand', ${data.understand}, ${data.condemn})">Понимаю 🤝</button>
+            </div>
 
-        input.value = '';
-        updateCharCounter();
-        await openComments();
-        tg.HapticFeedback.notificationOccurred('success');
-    } catch (e) { console.error(e); } finally { document.getElementById('sendCommentBtn').disabled = false; }
+            <!-- БЛОК СТАТИСТИКИ -->
+            <div class="stats" id="stats-${instanceId}" style="display: ${isAnswered ? 'block' : 'none'}">
+                <div class="stat-rows">
+                    <div id="val-u-${instanceId}" class="stat-row-item color-u"></div>
+                    <div id="val-c-${instanceId}" class="stat-row-item color-c"></div>
+                </div>
+                <div class="stat-bar-container">
+                    <div id="bar-u-${instanceId}" class="stat-part bar-u"></div>
+                    <div id="bar-c-${instanceId}" class="stat-part bar-c"></div>
+                </div>
+                <div class="result-actions">
+                    <button class="share-btn" onclick="shareApp()">🚀 Share</button>
+                    <button class="discuss-btn" onclick="openComments('${data.id}')">💬 Мнения</button>
+                </div>
+                <div class="swipe-hint">Листай дальше ↓</div>
+            </div>
+        </div>
+    `;
+
+    // Если уже отвечали, сразу рисуем статистику
+    if (isAnswered) {
+        setTimeout(() => updateStatsDisplay(instanceId, data.understand, data.condemn, existingChoice), 0);
+    }
+
+    return div;
+}
+
+function createAdElement(ad) {
+    const div = document.createElement('div');
+    div.className = 'card ad-card';
+    if (ad.image) div.style.backgroundImage = `url(${ad.image})`;
+    div.innerHTML = `
+        <div class="overlay"></div>
+        <div class="content">
+            <div class="ad-badge">РЕКЛАМА</div>
+            <div class="card-text">${ad.text}</div>
+            <button class="join-btn" onclick="tg.openTelegramLink('${ad.link}')">Перейти 📢</button>
+            <div class="swipe-hint" style="margin-top:20px">Пропустить ↓</div>
+        </div>
+    `;
+    return div;
+}
+
+// 6. ЛОГИКА ГОЛОСОВАНИЯ
+function vote(instanceId, dataId, type, uCount, cCount) {
+    // 1. Сохраняем локально
+    userLocalChoices[dataId] = type;
+    localStorage.setItem('userLocalChoices', JSON.stringify(userLocalChoices));
+    
+    // 2. Обновляем статистику сессии
+    userStats.total++;
+    userStats[type]++;
+    
+    // 3. Добавляем в историю
+    const cardData = allCards.find(c => c.id === dataId);
+    userHistory.unshift({ text: cardData.text, choice: type === 'understand' ? '🤝' : '👎' });
+    localStorage.setItem('userHistory', JSON.stringify(userHistory.slice(0, 50)));
+
+    // 4. Обновляем UI
+    document.getElementById(`actions-${instanceId}`).style.display = 'none';
+    document.getElementById(`stats-${instanceId}`).style.display = 'block';
+    
+    // Добавляем +1 к текущим числам для отображения
+    if (type === 'understand') uCount++; else cCount++;
+    updateStatsDisplay(instanceId, uCount, cCount);
+
+    // 5. Каждые 10 голосов — модалка сравнения
+    if (userStats.total % 10 === 0) openCompareModal();
+}
+
+function updateStatsDisplay(instanceId, uCount, cCount, choice) {
+    const total = uCount + cCount;
+    const uP = Math.round((uCount / total) * 100);
+    const cP = 100 - uP;
+
+    const valU = document.getElementById(`val-u-${instanceId}`);
+    const valC = document.getElementById(`val-c-${instanceId}`);
+    const barU = document.getElementById(`bar-u-${instanceId}`);
+    const barC = document.getElementById(`bar-c-${instanceId}`);
+
+    if (valU) valU.innerText = `${uP}% ПОНИМАЮТ`;
+    if (valC) valC.innerText = `${cP}% ОСУЖДАЮТ`;
+    if (barU) barU.style.width = uP + '%';
+    if (barC) barC.style.width = cP + '%';
+}
+
+// 7. КОММЕНТАРИИ
+function openComments(dataId) {
+    currentDataIdForComments = dataId;
+    document.getElementById('commentsModal').style.display = 'flex';
+    renderComments();
+}
+
+function renderComments() {
+    const list = document.getElementById('commentsList');
+    const comments = allComments[currentDataIdForComments] || [];
+    
+    if (comments.length === 0) {
+        list.innerHTML = '<p style="text-align:center; color:gray; padding:20px;">Пока никто не высказался. Будьте первым!</p>';
+        return;
+    }
+
+    list.innerHTML = comments.map(c => {
+        // Выбор автора: если в базе нет, берем нейтральный
+        const choiceClass = c.choice === 'understand' ? 'badge-u' : (c.choice === 'condemn' ? 'badge-c' : '');
+        return `
+            <div class="comment-item">
+                <div class="author-info">
+                    <div class="vote-badge ${choiceClass}"></div>
+                    <b>${c.author || 'Игрок'}</b>
+                </div>
+                <p>${c.text}</p>
+            </div>
+        `;
+    }).join('');
+}
+
+function addComment() {
+    const input = document.getElementById('commentInput');
+    const text = input.value.trim();
+    if (!text) return;
+
+    const isAnon = document.getElementById('anonCheckbox').checked;
+    const myChoice = userLocalChoices[currentDataIdForComments] || 'none';
+
+    const newComm = {
+        choice: myChoice,
+        author: isAnon ? 'Анонимно' : (tg.initDataUnsafe?.user?.first_name || 'Игрок'),
+        text: text
+    };
+
+    if (!allComments[currentDataIdForComments]) allComments[currentDataIdForComments] = [];
+    allComments[currentDataIdForComments].unshift(newComm);
+    
+    input.value = '';
+    updateCharCounter();
+    renderComments();
+}
+
+function updateCharCounter() {
+    const len = document.getElementById('commentInput').value.length;
+    document.getElementById('charCounter').innerText = `${len} / 500`;
 }
 
 function closeComments() { document.getElementById('commentsModal').style.display = 'none'; }
-function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
-function toggleHistory(s) {
-    const m = document.getElementById('historyModal');
-    if (s) {
-        document.getElementById('historyList').innerHTML = userHistory.length ? 
-            userHistory.map(h => `<div class="history-item"><span>${h.text.slice(0,30)}...</span><b style="color:${h.color}">${h.choice}</b></div>`).join('') : '<p>Пусто</p>';
-        m.style.display = 'flex';
-    } else m.style.display = 'none';
-}
-function shareApp() { tg.openTelegramLink(`https://t.me/share/url?url=https://t.me/your_bot/app&text=Зацени!`); }
-function openAdLink() { tg.openTelegramLink(adsData[(adIndex-1+adsData.length)%adsData.length].link); }
 
-init();
+// 8. ВСПОМОГАТЕЛЬНЫЕ ОКНА
+function toggleHistory(show) {
+    const modal = document.getElementById('historyModal');
+    modal.style.display = show ? 'flex' : 'none';
+    if(show) {
+        const list = document.getElementById('historyList');
+        list.innerHTML = userHistory.length ? userHistory.map(h => `
+            <div class="history-item"><span>${h.text}</span><b>${h.choice}</b></div>
+        `).join('') : '<p style="text-align:center; color:gray;">Тут будет ваш список выборов</p>';
+    }
+}
+
+function openCompareModal() {
+    const u = Math.round((userStats.understand / userStats.total) * 100);
+    document.getElementById('compareContent').innerHTML = `
+        <div style="text-align:center;">
+            <p style="font-size:20px; margin-bottom:10px;">Вы понимаете людей в <b>${u}%</b> случаев!</p>
+            <p style="color:gray; font-size:14px;">Статистика на основе последних ${userStats.total} выборов.</p>
+        </div>
+    `;
+    document.getElementById('compareModal').style.display = 'flex';
+}
+
+function closeCompare() { document.getElementById('compareModal').style.display = 'none'; }
+
+function shareApp() {
+    const uP = userStats.total > 0 ? Math.round((userStats.understand / userStats.total) * 100) : 0;
+    const text = encodeURIComponent(`Я понимаю людей на ${uP}%! Попробуй и ты в игре "Понимаю или Осуждаю" 🤝👎`);
+    tg.openTelegramLink(`https://t.me/share/url?url=https://t.me/YourBotLink&text=${text}`);
+}
